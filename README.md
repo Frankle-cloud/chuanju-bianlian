@@ -16,9 +16,11 @@ python run.py
 
 ## 结构
 
-- `index.html` + `recognition.js` —— 外壳 + 唯一一路摄像头识别（MediaPipe）
-- `act1-drum.html` —— 第一幕 · 锣鼓
-- `act2-sleeves.html` —— 第二幕 · 水袖
-- `act3-finale.html` —— 第三幕 · 变脸与喷火
-- `lib/` `models/` —— MediaPipe 引擎与模型
-- `sounds/` —— 击鼓音效
+网站文件在 `docs/`（GitHub Pages 从 `/docs` 发布）：
+
+- `docs/index.html` + `docs/recognition.js` —— 外壳 + 唯一一路摄像头识别（MediaPipe）
+- `docs/act1-drum.html` —— 第一幕 · 锣鼓
+- `docs/act2-sleeves.html` —— 第二幕 · 水袖
+- `docs/act3-finale.html` —— 第三幕 · 变脸与喷火
+- `docs/lib/` `docs/models/` —— MediaPipe 引擎与模型
+- `docs/sounds/` —— 击鼓音效

@@ -17,8 +17,8 @@ import webbrowser
 
 PORT = 8000
 
-# 以本脚本所在目录为网站根目录，避免从别处运行时路径错乱
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+# 网站文件在 docs/ 目录（GitHub Pages 从 /docs 发布），以 docs/ 为根目录
+os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs'))
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
