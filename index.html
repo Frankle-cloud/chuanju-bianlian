@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>入戏 · 川剧变脸三幕互动</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #151813;
+    color: #f4ebdd;
+    font-family: "Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+  }
+
+  /* 全屏 iframe 舞台 */
+  .stage-frame {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    border: 0; background: #151813;
+  }
+
+  /* 覆盖层（开始页 / 结束页） */
+  .screen {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background: radial-gradient(ellipse at 50% 45%, #2b2a24, #151813 78%);
+  }
+  .card {
+    max-width: 720px; width: 100%;
+    text-align: center;
+  }
+  .seal {
+    display: inline-block; width: 46px; height: 46px; line-height: 46px;
+    border: 1px solid #d7b57a; border-radius: 3px;
+    color: #f4ebdd; background: #873a2d; font-size: 22px;
+  }
+  h1 { font-weight: 400; margin: 18px 0 6px; font-size: 40px; letter-spacing: .04em; }
+  .sub { color: #cdc2ae; margin: 0 0 28px; font-size: 17px; }
+
+  .flow { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-bottom: 34px; }
+  .flow .step {
+    flex: 1; min-width: 150px; max-width: 200px;
+    border: 1px solid #786a4e; border-radius: 6px;
+    padding: 14px 10px; background: #25271f;
+  }
+  .flow .step b { display: block; color: #d7b57a; font-size: 14px; margin-bottom: 4px; }
+  .flow .step span { color: #aaa89b; font-size: 13px; }
+
+  button.primary {
+    background: #873a2d; color: #f4ebdd; border: 1px solid #d7b57a;
+    border-radius: 5px; padding: 13px 40px; font-size: 18px; cursor: pointer;
+  }
+  button.primary:hover { background: #a34a38; }
+
+  /* 右上角幕次指示 + 退出 */
+  .hud {
+    position: fixed; top: 14px; right: 14px; z-index: 20;
+    display: flex; gap: 8px; align-items: center;
+    background: rgba(21,24,19,.82); border: 1px solid #786a4e;
+    border-radius: 999px; padding: 7px 12px; font-size: 13px; color: #d7b57a;
+  }
+  .hud button {
+    background: transparent; border: 0; color: #cdc2ae; cursor: pointer;
+    font-size: 13px; padding: 0 4px;
+  }
+  .hud button:hover { color: #f4ebdd; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+  <!-- 开始页 -->
+  <section id="cover" class="screen">
+    <div class="card">
+      <span class="seal">戏</span>
+      <h1>川剧变脸 · 三幕互动</h1>
+      <p class="sub">锣鼓开场 · 水袖舞动 · 变脸喷火</p>
+      <div class="flow">
+        <div class="step"><b>第一幕 · 锣鼓</b><span>左右左右，敲响四拍</span></div>
+        <div class="step"><b>第二幕 · 水袖</b><span>展袖扬袖，两项入戏</span></div>
+        <div class="step"><b>第三幕 · 变脸与喷火</b><span>挥掌换面，指合生焰</span></div>
+      </div>
+      <button class="primary" id="start">开始体验</button>
+    </div>
+  </section>
+
+  <!-- 三幕 iframe（懒加载） -->
+  <iframe id="if-act1" class="stage-frame hidden" title="第一幕 锣鼓" allow="camera; microphone"></iframe>
+  <iframe id="if-act2" class="stage-frame hidden" title="第二幕 水袖" allow="camera; microphone"></iframe>
+  <iframe id="if-act3" class="stage-frame hidden" title="第三幕 变脸与喷火" allow="camera; microphone"></iframe>
+
+  <!-- 结束页 -->
+  <section id="end" class="screen hidden">
+    <div class="card">
+      <span class="seal">戏</span>
+      <h1>入戏有时，余韵未尽</h1>
+      <p class="sub">本次川剧手势体验已完成</p>
+      <button class="primary" id="restart">重新开始</button>
+    </div>
+  </section>
+
+  <!-- 右上角幕次指示 -->
+  <div id="hud" class="hud hidden">
+    <span id="hud-label">第一幕 · 锣鼓</span>
+    <span id="cam-status" style="color:#cdc2ae">摄像头未开启</span>
+    <button id="home" title="返回首页">退出</button>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SRC = {
+    act1: 'act1-drum.html',
+    act2: 'act2-sleeves.html',
+    act3: 'act3-finale.html'
+  };
+
+  var ACT_LABEL = {
+    act1: '第一幕 · 锣鼓',
+    act2: '第二幕 · 水袖',
+    act3: '第三幕 · 变脸与喷火'
+  };
+
+  var cover = document.getElementById('cover');
+  var end = document.getElementById('end');
+  var hud = document.getElementById('hud');
+  var hudLabel = document.getElementById('hud-label');
+
+  var iframes = {
+    act1: document.getElementById('if-act1'),
+    act2: document.getElementById('if-act2'),
+    act3: document.getElementById('if-act3')
+  };
+  var loaded = { act1: false, act2: false, act3: false };
+  var current = null;
+
+  function ensureLoaded(key) {
+    if (!loaded[key]) {
+      iframes[key].src = SRC[key];
+      loaded[key] = true;
+    }
+  }
+
+  function showOnly(visible) {
+    cover.classList.toggle('hidden', visible !== 'cover');
+    end.classList.toggle('hidden', visible !== 'end');
+    ['act1', 'act2', 'act3'].forEach(function (key) {
+      iframes[key].classList.toggle('hidden', visible !== key);
+    });
+  }
+
+  function go(stage) {
+    current = stage;
+    if (stage === 'cover' || stage === 'end') {
+      hud.classList.add('hidden');
+      showOnly(stage);
+      return;
+    }
+    ensureLoaded(stage);
+    hud.classList.remove('hidden');
+    hudLabel.textContent = ACT_LABEL[stage];
+    showOnly(stage);
+  }
+
+  function resetAll() {
+    ['act1', 'act2', 'act3'].forEach(function (key) {
+      iframes[key].src = '';
+      loaded[key] = false;
+    });
+  }
+
+  document.getElementById('start').addEventListener('click', function () { go('act1'); if (window.opusStart) window.opusStart(); });
+  document.getElementById('restart').addEventListener('click', function () {
+    if (window.opusStop) window.opusStop();
+    resetAll();
+    go('cover');
+  });
+  document.getElementById('home').addEventListener('click', function () {
+    if (window.opusStop) window.opusStop();
+    resetAll();
+    go('cover');
+  });
+
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (!d || d.type !== 'opera:next') return;
+    if (d.to === 'sleeves') go('act2');
+    else if (d.to === 'face-fire') go('act3');
+    else if (d.to === 'end') go('end');
+  });
+
+  go('cover');
+})();
+</script>
+<script type="module" src="recognition.js"></script>
+</body>
+</html>
