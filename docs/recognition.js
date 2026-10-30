@@ -24,9 +24,7 @@ const MIRROR = true;    // 自拍镜像
 // 锣鼓「下一幕」指令区（与 act1-drum.html 的 DATA.config.command 一致）
 const DRUM_COMMAND = { x: 1560, y: 804, width: 280, height: 88 };
 
-// 锣鼓敲击判定：掌心从「最近最高点」向下挥落超过此量（归一化 y）判定为一次敲击。
-const DRUM_STRIKE_DROP = 0.07;
-const DRUM_ANGLE_OFFSET = 0; // 鼓槌倾斜角偏移（度），按实机观感微调
+// 锣鼓敲击判定：抬手→下敲由 StrokeDetector 完成，阈值按手掌宽自适应（见下方工具段）。
 
 // 变脸手势（阈值沿用组件内置：捏合<0.28、张开>0.42；此处只算数值）
 const OPEN_PALM_MIN_FINGERS = 3; // 四指中至少几根伸直算「张开手掌」
@@ -35,13 +33,30 @@ const OPEN_PALM_MIN_FINGERS = 3; // 四指中至少几根伸直算「张开手�
 const SMOOTH_HAND = 0.55; // 手部 landmark 平滑系数
 const SMOOTH_FACE = 0.5;  // 人脸 landmark 平滑系数
 
+// 锣鼓抬手→下敲判定（移植自设计同学 drum-tracking-adapter.js 的 StrokeDetector）。
+// 输入为设计坐标 y 与设计像素手掌宽；带抬升武装、下落触发、冷却与丢手复位。
+class StrokeDetector {
+  constructor() { this.reset(); }
+  reset() { this.last = null; this.top = null; this.base = null; this.armed = false; this.armTime = null; this.coolUntil = -Infinity; }
+  update(p, now) {
+    if (!p || p.confidence < 0.7 || !Number.isFinite(p.y) || !Number.isFinite(p.palmWidth) || p.palmWidth < 8) { this.reset(); return false; }
+    if (this.last === null || now - this.last > 300) { this.reset(); this.last = now; this.base = this.top = p.y; return false; }
+    this.last = now;
+    const lift = Math.max(25, p.palmWidth * 0.35), drop = Math.max(30, p.palmWidth * 0.45);
+    if (!this.armed) { this.base = Math.max(this.base, p.y); if (now >= this.coolUntil && this.base - p.y >= lift) { this.armed = true; this.top = p.y; this.armTime = now; } return false; }
+    if (p.y < this.top) { this.top = p.y; this.armTime = now; }
+    if (p.y - this.top >= drop) { const elapsed = now - this.armTime; this.armed = false; this.base = p.y; this.coolUntil = now + 300; return elapsed >= 60 && elapsed <= 650; }
+    return false;
+  }
+}
+
 // ===== 状态 =====
 let faceLandmarker = null, handLandmarker = null, poseLandmarker = null;
 let video = null, detCv = null, dctx = null;
 let stream = null;
 let running = false;
 let lastVideoTime = -1;
-const drumState = { left: { minY: Infinity, armed: false }, right: { minY: Infinity, armed: false } };
+const drumStrokes = { left: new StrokeDetector(), right: new StrokeDetector() };
 const handSmooth = new Map(); // 手 id -> Float32Array(63)（21 点 xyz）
 const faceSmooth = { active: false, leftEye: null, rightEye: null, mouth: null };
 
@@ -72,13 +87,17 @@ function isInRegion(p, r) {
   return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
 }
 
-// 锣鼓鼓槌倾斜角（度，屏幕坐标 y 向下、正=顺时针）。
-// 取「腕(0)→中指掌骨(9)」向量，镜像 x 后与显示一致；减去 90° 使手自然朝下持槌时接近 0°。
-function drumAngleDeg(hlm) {
-  const dx = -(hlm[9].x - hlm[0].x); // 镜像 x
-  const dy = hlm[9].y - hlm[0].y;
-  const tilt = Math.atan2(dy, dx) * 180 / Math.PI;
-  return clamp(tilt + 90 + DRUM_ANGLE_OFFSET, -160, 160);
+// MediaPipe handedness 是解剖左右（"Left"/"Right"）；自拍镜像后解剖左手在画面左侧。
+// 返回稳定画面身份 side（'left'/'right'），未知返回 null。
+function handednessToSide(categoryName) {
+  if (categoryName === 'Left') return MIRROR ? 'left' : 'right';
+  if (categoryName === 'Right') return MIRROR ? 'right' : 'left';
+  return null;
+}
+
+// 手掌宽度：食指根(5)到小指根(17)欧氏距离，先按原图像素计算再除以视频宽（归一化）。
+function palmWidthNormalized(lm, vw, vh) {
+  return dist({ x: lm[5].x * vw, y: lm[5].y * vh }, { x: lm[17].x * vw, y: lm[17].y * vh }) / vw;
 }
 
 // ===== 手势特征 =====
@@ -164,25 +183,31 @@ function postTo(iframeId, data) {
 }
 
 // ===== 音效 =====
-// 击鼓「咚」：在父页面播放（父页面已被「开始体验」点击激活，规避 iframe 自动播放拦截）。
-let drumHitAudio = null;
-function playDrumHit() {
-  if (!drumHitAudio) drumHitAudio = new Audio('sounds/drum_hit.wav');
-  const a = drumHitAudio;
+// 击鼓：左/右手用不同采样，在父页面播放（父页面已被「开始体验」点击激活，规避 iframe 自动播放拦截）。
+const drumHitAudios = {
+  left: new Audio('sounds/drum_hit.wav'),
+  right: new Audio('sounds/drum_hit_right.wav'),
+};
+function playDrumHit(side) {
+  const a = drumHitAudios[side] || drumHitAudios.left;
   try { a.currentTime = 0; } catch (e) {}
   a.play().catch(() => {});
 }
 
 // ===== 每幕处理 =====
 function processDrum(vw, vh) {
-  const handResult = handLandmarker.detectForVideo(detCv, performance.now());
+  const now = performance.now();
+  const handResult = handLandmarker.detectForVideo(detCv, now);
   const lms = (handResult && handResult.landmarks) || [];
   const hands = [], hits = [];
   let command = { x: 0, y: 0, active: false };
+  const scale = Math.min(1920 / vw, 1080 / vh);
 
-  // 平滑后再算掌心/角度（与变脸幕一致，避免鼓棒逐帧抖动）
+  // 平滑后再算掌心/手掌宽/置信度（与变脸幕一致，避免鼓棒逐帧抖动）
   const seen = new Set();
-  const mapped = lms.map((hlm, i) => {
+  const detected = [];
+  for (let i = 0; i < lms.length; i++) {
+    const hlm = lms[i];
     const hlist = handResult.handedness || handResult.handednesses;
     const hc = hlist && hlist[i] && hlist[i][0];
     const id = hc ? hc.categoryName : ('hand' + i);
@@ -191,45 +216,54 @@ function processDrum(vw, vh) {
     handSmooth.set(id, sm);
     const lm = unflatten(sm);
     const pc = palmCenter(lm);
-    return { lm, pc, p: mapVideoPoint(pc.x, pc.y, vw, vh, MIRROR) };
-  }).sort((a, b) => a.p.x - b.p.x);
+    detected.push({
+      p: mapVideoPoint(pc.x, pc.y, vw, vh, MIRROR),
+      side: handednessToSide(hc && hc.categoryName),
+      confidence: hc ? hc.score : 0,
+      pw: palmWidthNormalized(lm, vw, vh) * vw * scale, // 手掌宽（设计像素）
+    });
+  }
   for (const id of handSmooth.keys()) if (!seen.has(id)) handSmooth.delete(id);
 
+  // 稳定画面左右：优先 handedness（自拍镜像后解剖左=画面左），交叉手不重排；
+  // 仅在 handedness 冲突/缺失时按 x 兜底分配空位（保留原「单手按 x 归边」语义）。
   let left = null, right = null;
-  if (mapped.length >= 2) { left = mapped[0]; right = mapped[mapped.length - 1]; }
-  else if (mapped.length === 1) { if (mapped[0].p.x < 960) left = mapped[0]; else right = mapped[0]; }
-
-  // 相对下落敲击：手上升刷新最高点；从最高点向下挥落超过阈值触发一次，之后需再抬手。
-  const strike = (side, pc) => {
-    const st = drumState[side];
-    if (pc.y < st.minY) { st.minY = pc.y; st.armed = true; }
-    if (st.armed && pc.y - st.minY >= DRUM_STRIKE_DROP) { st.armed = false; st.minY = pc.y; return true; }
-    return false;
-  };
+  for (const d of detected) {
+    if (d.side === 'left' && !left) left = d;
+    else if (d.side === 'right' && !right) right = d;
+  }
+  const rest = detected.filter(d => d !== left && d !== right).sort((a, b) => a.p.x - b.p.x);
+  if (!left && !right && rest.length === 1) {
+    if (rest[0].p.x < 960) left = rest[0]; else right = rest[0];
+  } else {
+    if (!left) left = rest.shift() || null;
+    if (!right) right = rest.shift() || null;
+  }
 
   if (left) {
-    hands.push({ side: 'left', x: left.p.x, y: left.p.y, angleDeg: drumAngleDeg(left.lm), visible: true });
-    if (strike('left', left.pc)) hits.push('left');
+    hands.push({ side: 'left', x: left.p.x, y: left.p.y, visible: true });
+    if (drumStrokes.left.update({ y: left.p.y, palmWidth: left.pw, confidence: left.confidence }, now)) hits.push('left');
   } else {
     hands.push({ side: 'left', visible: false });
+    drumStrokes.left.reset();
   }
 
   if (right) {
-    hands.push({ side: 'right', x: right.p.x, y: right.p.y, angleDeg: drumAngleDeg(right.lm), visible: true });
+    hands.push({ side: 'right', x: right.p.x, y: right.p.y, visible: true });
     const inRegion = isInRegion(right.p, DRUM_COMMAND);
     command = { x: right.p.x, y: right.p.y, active: inRegion };
     // 画面右侧是「指令手」：进入右下指令区时暂停它的敲击判定，并复位状态避免离开误触。
     if (!inRegion) {
-      if (strike('right', right.pc)) hits.push('right');
+      if (drumStrokes.right.update({ y: right.p.y, palmWidth: right.pw, confidence: right.confidence }, now)) hits.push('right');
     } else {
-      drumState.right.minY = Infinity;
-      drumState.right.armed = false;
+      drumStrokes.right.reset();
     }
   } else {
     hands.push({ side: 'right', visible: false });
+    drumStrokes.right.reset();
   }
 
-  for (const s of hits) playDrumHit();
+  for (const s of hits) playDrumHit(s);
   postTo('if-act1', { type: 'opera:input', act: 'drum', hands, hits, command });
 }
 
