@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>入戏 · 川剧变脸三幕互动</title>
+<title>川剧入戏 · 三幕互动</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -26,6 +26,10 @@
     display: flex; align-items: center; justify-content: center;
     padding: 24px;
     background: radial-gradient(ellipse at 50% 45%, #2b2a24, #151813 78%);
+  }
+  /* 首页背景图：铺满整屏 */
+  #cover {
+    background: url('assets/cover-bg.png') center / cover no-repeat;
   }
   .card {
     max-width: 720px; width: 100%;
@@ -75,13 +79,12 @@
   <!-- 开始页 -->
   <section id="cover" class="screen">
     <div class="card">
-      <span class="seal">戏</span>
-      <h1>川剧变脸 · 三幕互动</h1>
+      <h1>川剧入戏 · 三幕互动</h1>
       <p class="sub">锣鼓开场 · 水袖舞动 · 变脸喷火</p>
       <div class="flow">
         <div class="step"><b>第一幕 · 锣鼓</b><span>左右左右，敲响四拍</span></div>
         <div class="step"><b>第二幕 · 水袖</b><span>展袖扬袖，两项入戏</span></div>
-        <div class="step"><b>第三幕 · 变脸与喷火</b><span>挥掌换面，指合生焰</span></div>
+        <div class="step"><b>第三幕 · 变脸与喷火</b><span>盖脸换面，指合生焰</span></div>
       </div>
       <button class="primary" id="start">开始体验</button>
     </div>
@@ -95,7 +98,6 @@
   <!-- 结束页 -->
   <section id="end" class="screen hidden">
     <div class="card">
-      <span class="seal">戏</span>
       <h1>入戏有时，余韵未尽</h1>
       <p class="sub">本次川剧手势体验已完成</p>
       <button class="primary" id="restart">重新开始</button>
@@ -114,9 +116,9 @@
   'use strict';
 
   var SRC = {
-    act1: 'act1-drum.html',
-    act2: 'act2-sleeves.html',
-    act3: 'act3-finale.html'
+    act1: 'act1-drum.html?v=2',
+    act2: 'act2-sleeves.html?v=5',
+    act3: 'act3-finale.html?v=6'
   };
 
   var ACT_LABEL = {
@@ -153,17 +155,36 @@
     });
   }
 
+  var bgm = null;
+  function startBgm() {
+    if (!bgm) bgm = new Audio('sounds/水袖-别洞观景.wav');
+    bgm.loop = true; bgm.volume = 0.6;
+    bgm.currentTime = 0;
+    bgm.play().catch(function () {});
+  }
+  function stopBgm() { if (bgm) { bgm.pause(); bgm.currentTime = 0; } }
+
+  var fireAudio = null;
+  function playFire() {
+    if (!fireAudio) fireAudio = new Audio('sounds/fire.wav');
+    fireAudio.currentTime = 0;
+    fireAudio.volume = 0.9;
+    fireAudio.play().catch(function () {});
+  }
+
   function go(stage) {
     current = stage;
     if (stage === 'cover' || stage === 'end') {
       hud.classList.add('hidden');
       showOnly(stage);
+      stopBgm();
       return;
     }
     ensureLoaded(stage);
     hud.classList.remove('hidden');
     hudLabel.textContent = ACT_LABEL[stage];
     showOnly(stage);
+    if (stage === 'act2') startBgm(); else stopBgm();
   }
 
   function resetAll() {
@@ -187,7 +208,9 @@
 
   window.addEventListener('message', function (e) {
     var d = e.data;
-    if (!d || d.type !== 'opera:next') return;
+    if (!d) return;
+    if (d.type === 'opera:fx') { if (d.fx === 'fire') playFire(); return; }
+    if (d.type !== 'opera:next') return;
     if (d.to === 'sleeves') go('act2');
     else if (d.to === 'face-fire') go('act3');
     else if (d.to === 'end') go('end');
@@ -196,6 +219,6 @@
   go('cover');
 })();
 </script>
-<script type="module" src="recognition.js"></script>
+<script type="module" src="recognition.js?v=5"></script>
 </body>
 </html>

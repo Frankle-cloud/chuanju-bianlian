@@ -196,6 +196,7 @@ function playDrumHit(side) {
 
 // ===== 每幕处理 =====
 function processDrum(vw, vh) {
+  injectStream('if-act1');
   const now = performance.now();
   const handResult = handLandmarker.detectForVideo(detCv, now);
   const lms = (handResult && handResult.landmarks) || [];
@@ -268,9 +269,29 @@ function processDrum(vw, vh) {
 }
 
 function processSleeves(vw, vh) {
-  const poseResult = poseLandmarker.detectForVideo(detCv, performance.now());
+  injectStream('if-act2');
+  const ts = performance.now();
+  const poseResult = poseLandmarker.detectForVideo(detCv, ts);
   const landmarks = (poseResult && poseResult.landmarks && poseResult.landmarks[0]) || null;
-  postTo('if-act2', { type: 'opera:input', act: 'sleeves', landmarks, width: vw, height: vh });
+
+  // 「下一幕」指令指针：与第一/三幕一致，用右手掌心（画面右侧）而非手腕，更易对准按钮。
+  let command = { x: 0, y: 0, active: false };
+  const handResult = handLandmarker.detectForVideo(detCv, ts);
+  const hl = (handResult && handResult.landmarks) || [];
+  const hlist = handResult && (handResult.handedness || handResult.handednesses);
+  for (let i = 0; i < hl.length; i++) {
+    const hc = hlist && hlist[i] && hlist[i][0];
+    if (!hc || handednessToSide(hc.categoryName) !== 'right') continue;
+    const sm = smoothArr(handSmooth.get(hc.categoryName), flatten(hl[i]), SMOOTH_HAND);
+    handSmooth.set(hc.categoryName, sm);
+    const lm = unflatten(sm);
+    const pc = palmCenter(lm);
+    const p = mapVideoPoint(pc.x, pc.y, vw, vh, MIRROR);
+    command = { x: p.x, y: p.y, active: openPalm(lm) };
+    break;
+  }
+
+  postTo('if-act2', { type: 'opera:input', act: 'sleeves', landmarks, command, width: vw, height: vh });
 }
 
 function processFinale(vw, vh) {
@@ -287,7 +308,8 @@ function processFinale(vw, vh) {
     const mo = smoothPt(faceSmooth.mouth, mid(lm, 13, 14), SMOOTH_FACE);
     faceSmooth.active = true;
     faceSmooth.leftEye = le; faceSmooth.rightEye = re; faceSmooth.mouth = mo;
-    face = { leftEye: le, rightEye: re, mouth: mo };
+    face = { leftEye: le, rightEye: re, mouth: mo,
+      landmarks: lm.map(p => ({ x:p.x, y:p.y, z:p.z })) };
   } else {
     faceSmooth.active = false;
     faceSmooth.leftEye = faceSmooth.rightEye = faceSmooth.mouth = null;
@@ -312,17 +334,17 @@ function processFinale(vw, vh) {
   for (const id of handSmooth.keys()) if (!seen.has(id)) handSmooth.delete(id);
 
   // 把同一路摄像头流注入第三幕的 <video> 作镜像背景。
-  injectFinaleStream();
+  injectStream('if-act3');
 
   postTo('if-act3', { type: 'opera:input', act: 'finale', frame: { face, hands }, width: vw, height: vh });
 }
 
-function injectFinaleStream() {
+function injectStream(iframeId) {
   if (!stream) return;
-  const f = document.getElementById('if-act3');
+  const f = document.getElementById(iframeId);
   if (!f || !f.contentDocument) return;
   const v = f.contentDocument.querySelector('video');
-  if (v && v.srcObject !== stream) v.srcObject = stream;
+  if (v && v.srcObject !== stream) { v.srcObject = stream; v.classList.add('on'); }
 }
 
 // ===== 主循环 =====
