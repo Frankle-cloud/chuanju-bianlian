@@ -154,17 +154,44 @@ async function createWithDelegate(make, modelPath, opts) {
   throw new Error('模型加载失败（GPU/CPU 均不可用）：' + modelPath);
 }
 
-async function initModels() {
-  const vision = await FilesetResolver.forVisionTasks(WASM_DIR);
-  faceLandmarker = await createWithDelegate(
-    (o) => FaceLandmarker.createFromOptions(vision, o), MODELS.face,
-    { runningMode: 'VIDEO', numFaces: 1 });
-  handLandmarker = await createWithDelegate(
-    (o) => HandLandmarker.createFromOptions(vision, o), MODELS.hand,
-    { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.5 });
-  poseLandmarker = await createWithDelegate(
-    (o) => PoseLandmarker.createFromOptions(vision, o), MODELS.pose,
-    { runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.5 });
+let vision = null;      // FilesetResolver 结果（wasm 引擎），首次用到时加载
+let posePromise = null; // 姿态模型懒加载 Promise（第二幕用到）
+let facePromise = null; // 人脸模型懒加载 Promise（第三幕用到）
+
+// 核心模型：wasm 引擎 + 手部（第一幕锣鼓只需手部，启动时只加载这些）
+async function initCore() {
+  if (!vision) vision = await FilesetResolver.forVisionTasks(WASM_DIR);
+  if (!handLandmarker) {
+    handLandmarker = await createWithDelegate(
+      (o) => HandLandmarker.createFromOptions(vision, o), MODELS.hand,
+      { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.5 });
+  }
+}
+
+// 姿态模型（第二幕水袖用），进入第二幕时按需加载
+async function ensurePose() {
+  if (poseLandmarker) return;
+  if (posePromise) return posePromise;
+  posePromise = (async () => {
+    await initCore();
+    poseLandmarker = await createWithDelegate(
+      (o) => PoseLandmarker.createFromOptions(vision, o), MODELS.pose,
+      { runningMode: 'VIDEO', numPoses: 1, minPoseDetectionConfidence: 0.5 });
+  })();
+  return posePromise;
+}
+
+// 人脸模型（第三幕变脸用），进入第三幕时按需加载
+async function ensureFace() {
+  if (faceLandmarker) return;
+  if (facePromise) return facePromise;
+  facePromise = (async () => {
+    await initCore();
+    faceLandmarker = await createWithDelegate(
+      (o) => FaceLandmarker.createFromOptions(vision, o), MODELS.face,
+      { runningMode: 'VIDEO', numFaces: 1 });
+  })();
+  return facePromise;
 }
 
 async function startCamera() {
@@ -270,6 +297,7 @@ function processDrum(vw, vh) {
 
 function processSleeves(vw, vh) {
   injectStream('if-act2');
+  if (!poseLandmarker) return; // 姿态模型懒加载中：先注入镜像画面，识别跳过
   const ts = performance.now();
   const poseResult = poseLandmarker.detectForVideo(detCv, ts);
   const landmarks = (poseResult && poseResult.landmarks && poseResult.landmarks[0]) || null;
@@ -295,6 +323,8 @@ function processSleeves(vw, vh) {
 }
 
 function processFinale(vw, vh) {
+  injectStream('if-act3');
+  if (!faceLandmarker) return; // 人脸模型懒加载中：先注入镜像画面，识别跳过
   const ts = performance.now();
   const faceResult = faceLandmarker.detectForVideo(detCv, ts);
   const handResult = handLandmarker.detectForVideo(detCv, ts);
@@ -333,9 +363,6 @@ function processFinale(vw, vh) {
   }
   for (const id of handSmooth.keys()) if (!seen.has(id)) handSmooth.delete(id);
 
-  // 把同一路摄像头流注入第三幕的 <video> 作镜像背景。
-  injectStream('if-act3');
-
   postTo('if-act3', { type: 'opera:input', act: 'finale', frame: { face, hands }, width: vw, height: vh });
 }
 
@@ -366,8 +393,8 @@ function processFrame() {
   const a = activeFrameKey();
   if (!a) return; // 首页 / 结束页不识别
   if (a.id === 'if-act1') processDrum(vw, vh);
-  else if (a.id === 'if-act2') processSleeves(vw, vh);
-  else if (a.id === 'if-act3') processFinale(vw, vh);
+  else if (a.id === 'if-act2') { ensurePose().catch(() => {}); processSleeves(vw, vh); }
+  else if (a.id === 'if-act3') { ensureFace().catch(() => {}); processFinale(vw, vh); }
 }
 
 function loop() {
@@ -391,9 +418,9 @@ async function opusStart() {
   }
   const st = statusEl();
   try {
-    if (!faceLandmarker) {
+    if (!handLandmarker) {
       if (st) st.textContent = '加载识别模型…';
-      await initModels();
+      await initCore();
     }
     if (!stream) {
       if (st) st.textContent = '请求摄像头权限…';
